@@ -24,6 +24,29 @@ function snapshot(room) {
     winner: room.winner, lastResult: room.lastResult, readyAt: room.readyAt };
 }
 function publish(room) { broadcast(room, snapshot(room)); }
+function finishCard(room) {
+  if (room.phase !== 'playing') return;
+  if (room.suddenDeath) {
+    room.phase='finished';
+    const high=Math.max(...[...room.players.values()].map(p=>p.score));
+    room.winner=[...room.players.values()].filter(p=>p.score===high).map(p=>p.name);
+    publish(room);
+    return;
+  }
+  if (room.round < room.total) { nextCard(room); return; }
+  const high=Math.max(...[...room.players.values()].map(p=>p.score));
+  const leaders=[...room.players.values()].filter(p=>p.score===high);
+  if (leaders.length>1) {
+    room.suddenDeath=true;
+    room.tiedIds=leaders.map(p=>p.id);
+    room.round=room.total;
+    nextCard(room);
+  } else {
+    room.phase='finished';
+    room.winner=leaders.map(p=>p.name);
+    publish(room);
+  }
+}
 const COLORS = [
   {name:'RED', hex:'#fa5266'}, {name:'BLUE', hex:'#5b7cfa'}, {name:'GREEN', hex:'#46c98b'},
   {name:'YELLOW', hex:'#f4bf4f'}, {name:'PURPLE', hex:'#b781f5'}, {name:'ORANGE', hex:'#ff9257'}
@@ -38,15 +61,7 @@ function nextCard(room) {
   room.phase = 'playing'; room.lastResult = null;
   for (const p of room.players.values()) p.locked = false;
   publish(room);
-  room.timer = setTimeout(() => {
-    if (room.phase !== 'playing') return;
-    if (room.suddenDeath) { room.phase='finished'; const high=Math.max(...[...room.players.values()].map(p=>p.score)); room.winner=[...room.players.values()].filter(p=>p.score===high).map(p=>p.name); publish(room); return; }
-    if (room.round < room.total) { nextCard(room); return; }
-    const high=Math.max(...[...room.players.values()].map(p=>p.score));
-    const leaders=[...room.players.values()].filter(p=>p.score===high);
-    if (leaders.length>1) { room.suddenDeath=true; room.tiedIds=leaders.map(p=>p.id); room.round=room.total; nextCard(room); }
-    else { room.phase='finished'; room.winner=leaders.map(p=>p.name); publish(room); }
-  }, 7000);
+  room.timer = setTimeout(() => finishCard(room), 7000);
 }
 function sendError(peer, message) { send(peer, {type:'error', message}); }
 function removePeer(peer) {
@@ -95,23 +110,16 @@ function handle(peer, msg) {
       publish(room); return;
     }
     peer.score += 1;
-    const fastest = [...room.players.values()].every(p => p.locked);
-    const correctCount = [...room.players.values()].filter(p=>p.locked && p.score > 0).length;
     // The first correct answer on each card receives the speed bonus.
     const already = room.card.scored;
     if (!already) { peer.score += 1; room.card.scored=true; }
     room.lastResult = {name:peer.name, bonus:!already};
     send(peer,{type:'feedback',ok:true,text:already ? '+1 point' : '+2 points · fastest!'});
     publish(room);
-    clearTimeout(room.timer);
-    room.timer=setTimeout(()=>{
-      if (room.round >= room.total) {
-        const high=Math.max(...[...room.players.values()].map(p=>p.score));
-        const leaders=[...room.players.values()].filter(p=>p.score===high);
-        if (leaders.length>1 && !room.suddenDeath) { room.suddenDeath=true; room.tiedIds=leaders.map(p=>p.id); room.round=room.total; nextCard(room); }
-        else { room.phase='finished'; room.winner=leaders.map(p=>p.name); publish(room); }
-      } else nextCard(room);
-    }, 1450);
+    if ([...room.players.values()].every(p=>p.locked)) {
+      clearTimeout(room.timer);
+      room.timer=setTimeout(()=>finishCard(room),1450);
+    }
   }
 }
 const server = http.createServer((req,res) => {
