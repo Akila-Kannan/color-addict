@@ -20,7 +20,7 @@ function send(peer, data) { if (!peer.dead) peer.socket.write(frame(JSON.stringi
 function broadcast(room, data) { for (const p of room.players.values()) send(p, data); }
 function snapshot(room) {
   return { type: 'state', room: room.code, phase: room.phase, round: room.round, total: room.total, suddenDeath: !!room.suddenDeath,
-    card: room.card, prompt: room.prompt, players: [...room.players.values()].map(p => ({ id:p.id, name:p.name, score:p.score, host:p.id===room.hostId, locked:p.locked })),
+    card: room.card, prompt: room.prompt, players: [...room.players.values()].map(p => ({ id:p.id, name:p.name, score:p.score, host:p.id===room.hostId, locked:p.locked, feedback:p.feedback })),
     winner: room.winner, lastResult: room.lastResult, readyAt: room.readyAt };
 }
 function publish(room) { broadcast(room, snapshot(room)); }
@@ -59,7 +59,7 @@ function nextCard(room) {
   room.prompt = Math.random() < .5 ? 'WORD' : 'INK';
   room.round++;
   room.phase = 'playing'; room.lastResult = null;
-  for (const p of room.players.values()) p.locked = false;
+  for (const p of room.players.values()) { p.locked = false; p.feedback = null; }
   publish(room);
   room.timer = setTimeout(() => finishCard(room), 7000);
 }
@@ -88,7 +88,7 @@ function handle(peer, msg) {
     } else if (!room) return sendError(peer, 'Room not found. Check the code and try again.');
     if (room.players.size >= 8) return sendError(peer, 'This room is full (8 players max).');
     if (room.phase !== 'lobby' && !msg.create) return sendError(peer, 'This game has already started.');
-    peer.id = crypto.randomUUID(); peer.name = name; peer.score = 0; peer.locked = false; peer.room = room.code;
+    peer.id = crypto.randomUUID(); peer.name = name; peer.score = 0; peer.locked = false; peer.feedback = null; peer.room = room.code;
     room.players.set(peer.id, peer);
     if (!room.hostId) room.hostId = peer.id;
     send(peer, {type:'joined', id:peer.id, room:room.code}); publish(room);
@@ -96,23 +96,24 @@ function handle(peer, msg) {
     const room = rooms.get(peer.room); if (!room || room.hostId !== peer.id) return;
     if (room.players.size < 2) return sendError(peer, 'Invite at least one more player to start.');
     room.total = Math.max(5, Math.min(20, Number(msg.total) || 10)); room.round=0;
-    for (const p of room.players.values()) { p.score=0; p.locked=false; }
+    for (const p of room.players.values()) { p.score=0; p.locked=false; p.feedback=null; }
     room.suddenDeath=false; room.phase='ready'; room.readyAt=Date.now()+1800; publish(room);
     clearTimeout(room.timer); room.timer=setTimeout(()=>nextCard(room),1800);
   } else if (msg.type === 'answer') {
     const room = rooms.get(peer.room); if (!room || room.phase !== 'playing' || peer.locked || !room.card) return;
     if (room.suddenDeath && !room.tiedIds?.includes(peer.id)) return;
     const correct = String(msg.color).toUpperCase() === (room.prompt === 'WORD' ? room.card.word : room.card.ink);
-    if (!correct) { peer.locked=true; send(peer,{type:'feedback', ok:false, text:'Not that one — take a breath!'}); publish(room); return; }
+    if (!correct) { peer.locked=true; peer.feedback={ok:false,text:'Not that one — no points this card.',round:room.round}; send(peer,{type:'feedback', ok:false, text:peer.feedback.text}); publish(room); return; }
     peer.locked=true;
     if (room.suddenDeath) {
-      peer.score += 1; room.phase='finished'; room.winner=[peer.name]; room.lastResult={id:peer.id,name:peer.name,bonus:false,points:1,total:peer.score};
+      peer.score += 1; peer.feedback={ok:true,text:`YOU +1 · TOTAL ${peer.score}`,round:room.round}; room.phase='finished'; room.winner=[peer.name]; room.lastResult={id:peer.id,name:peer.name,bonus:false,points:1,total:peer.score};
       publish(room); return;
     }
     peer.score += 1;
     // The first correct answer on each card receives the speed bonus.
     const already = room.card.scored;
     if (!already) { peer.score += 1; room.card.scored=true; }
+    peer.feedback={ok:true,text:`YOU +${already?1:2} · TOTAL ${peer.score}${already?'':' · SPEED BONUS'}`,round:room.round};
     room.lastResult = {id:peer.id,name:peer.name,bonus:!already,points:already?1:2,total:peer.score};
     send(peer,{type:'feedback',ok:true,text:already ? '+1 point' : '+2 points · fastest!'});
     publish(room);
