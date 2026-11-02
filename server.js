@@ -106,14 +106,14 @@ function handle(peer, msg) {
     if (!correct) { peer.locked=true; send(peer,{type:'feedback', ok:false, text:'Not that one — take a breath!'}); publish(room); return; }
     peer.locked=true;
     if (room.suddenDeath) {
-      peer.score += 1; room.phase='finished'; room.winner=[peer.name]; room.lastResult={name:peer.name,bonus:false};
+      peer.score += 1; room.phase='finished'; room.winner=[peer.name]; room.lastResult={id:peer.id,name:peer.name,bonus:false,points:1,total:peer.score};
       publish(room); return;
     }
     peer.score += 1;
     // The first correct answer on each card receives the speed bonus.
     const already = room.card.scored;
     if (!already) { peer.score += 1; room.card.scored=true; }
-    room.lastResult = {name:peer.name, bonus:!already};
+    room.lastResult = {id:peer.id,name:peer.name,bonus:!already,points:already?1:2,total:peer.score};
     send(peer,{type:'feedback',ok:true,text:already ? '+1 point' : '+2 points · fastest!'});
     publish(room);
     if ([...room.players.values()].every(p=>p.locked)) {
